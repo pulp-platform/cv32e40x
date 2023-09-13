@@ -563,7 +563,6 @@ module cv32e40x_core import cv32e40x_pkg::*;
     .alu_jmp_o                    ( alu_jmp_id                ),
     .alu_jmpr_o                   ( alu_jmpr_id               ),
     .sys_mret_insn_o              ( sys_mret_insn_id          ),
-    .csr_illegal_i                ( csr_illegal               ),
     .csr_en_raw_o                 ( csr_en_raw_id             ),
     .alu_en_o                     ( alu_en_id                 ),
     .sys_en_o                     ( sys_en_id                 ),

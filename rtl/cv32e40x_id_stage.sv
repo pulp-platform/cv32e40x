@@ -74,7 +74,6 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
 
   output logic        sys_mret_insn_o,
 
-  input  logic        csr_illegal_i,
   output logic        csr_en_raw_o,
 
   output logic        alu_en_o,
@@ -709,7 +708,7 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
       // Also attempt to offload any CSR instruction. The validity of such instructions are only
       // checked in the EX stage.
       // Instructions with deassert_we set to 1 from the controller bypass logic will not be attempted offloaded.
-      assign xif_issue_if.issue_valid     = instr_valid && (illegal_insn || (csr_en && csr_illegal_i)) &&
+      assign xif_issue_if.issue_valid     = instr_valid && (illegal_insn || csr_en) &&
                                             !(xif_accepted_q || xif_rejected_q || ctrl_byp_i.deassert_we);
 
       // Keep xif_offloading_o high after an offloaded instruction was accepted or rejected to get
