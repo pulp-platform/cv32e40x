@@ -60,6 +60,47 @@ The ``rvfi_dbg_mode`` signal is high if the instruction was executed in debug mo
 
 Whenever |corev| has a pending NMI, the ``rvfi_nmip`` will signal this. ``rvfi_nmip[0]`` will be 1 whenever an NMI is pending, while ``rvfi_nmip[1]`` will be 0 for loads and 1 for stores.
 
+**Memory interface signals**
+
+|corev| RVFI memory signals ``rvfi_mem_``  are extended to support multiple memory operations per instruction and the following signals have been added:
+
+.. code-block:: verilog
+
+  output [ 1*NMEM-1:0] rvfi_mem_exokay,
+  output [ 1*NMEM-1:0] rvfi_mem_err,
+  output [ 3*NMEM-1:0] rvfi_mem_prot,
+  output [ 6*NMEM-1:0] rvfi_mem_atop,
+  output [ 2*NMEM-1:0] rvfi_mem_memtype,
+  output [ NMEM-1  :0] rvfi_mem_dbg
+
+**Integer register read/write**
+
+The integer register read/write signals have been extended to support multiple register file operations per instruction.
+
+.. code-block:: verilog
+
+   output [32*32-1:0] rvfi_gpr_rdata,
+   output [31:0]      rvfi_gpr_rmask,
+   output [32*32-1:0] rvfi_gpr_wdata,
+   output [31:0]      rvfi_gpr_wmask
+
+**Instruction fetch attributes**
+
+|corev| RVFI has been extended with the following signals for reporting attributes used when fetching an instruction.
+
+.. code-block:: verilog
+
+   output [2:0] rvfi_instr_prot,
+   output [1:0] rvfi_instr_memtype,
+   output       rvfi_instr_dbg
+
+**rvfi_trap and rvfi_intr**
+
+These two signals have been extended, see :ref:`rvfi_compatibility`.
+
+
+.. _rvfi_compatibility:
+
 Compatibility
 -------------
 
@@ -224,21 +265,69 @@ For |corev|, the ``rvfi_mem`` interface has been expanded to support multiple me
 
 .. code-block:: verilog
 
-   output [NRET * NMEM * XLEN - 1 : 0]   rvfi_mem_addr
+   output [NRET * NMEM * XLEN   - 1 : 0] rvfi_mem_addr
    output [NRET * NMEM * XLEN/8 - 1 : 0] rvfi_mem_rmask
    output [NRET * NMEM * XLEN/8 - 1 : 0] rvfi_mem_wmask
-   output [NRET * NMEM * XLEN - 1 : 0]   rvfi_mem_rdata
-   output [NRET * NMEM * XLEN - 1 : 0]   rvfi_mem_wdata
-   output [NRET * NMEM * 3    - 1 : 0]   rvfi_mem_prot
+   output [NRET * NMEM * XLEN   - 1 : 0] rvfi_mem_rdata
+   output [NRET * NMEM * XLEN   - 1 : 0] rvfi_mem_wdata
+   output [NRET * NMEM * 3      - 1 : 0] rvfi_mem_prot
+   output [NRET * NMEM * 6      - 1 : 0] rvfi_mem_atop
+   output [NRET * NMEM * 1      - 1 : 0] rvfi_mem_err
+   output [NRET * NMEM * 1      - 1 : 0] rvfi_mem_exokay
+   output [NRET * NMEM * 2      - 1 : 0] rvfi_mem_memtype
+   output [       NMEM          - 1 : 0] rvfi_mem_dbg
 
 Instructions will populate the ``rvfi_mem`` outputs with incrementing ``NMEM``, starting at ``NMEM=1``.
 
 Instructions with a single memory operation (e.g. all RV32I instructions), including split misaligned transfers, will only use NMEM = 1.
 Instructions with multiple memory operations (e.g. the push and pop instructions from Zcmp) use NMEM > 1 in case multiple memory operations actually occur.
 ``rvfi_mem_prot`` indicates the value of OBI prot used for the memory access or accesses. Note that this will be undefined upon access faults.
+``rvfi_mem_memtype`` indicates the memory type attributes associated with each memory operation (i.e cacheable or bufferable). For misaligned transactions that are
+split in two memory operations ``rvfi_mem_memtype`` will only report the type attribute for the first memory operation.
+``rvfi_mem_atop`` indicates the type of atomic transaction as specified in [OPENHW-OBI]_.
+``rvfi_mem_exokay``  indicates the status of ``data_exokay_i`` for loads, non-bufferable stores and atomic instructions (and signals 0 otherwise). For split transactions, ``rvfi_mem_exokay`` will only
+be 1 if both transactions receive ``data_exokay_i == 1``.
+``rvfi_mem_err`` indicates if a load, non-bufferable store or atomic instruction got a bus error (and signals 0 otherwise). :numref:`rvfi_mem_err encoding for different transaction types` shows how
+different memory transactions report ``rvfi_mem_err``.
+
+.. table:: rvfi_mem_err encoding for different transaction types
+  :name: rvfi_mem_err encoding for different transaction types
+  :widths: 60 5 5 5 60
+  :class: no-scrollbar-table
+
+  +---------------------+---------+----------------+----------------+--------------------------------+
+  | Instruction type    | Split   | Bufferable (1) | Bufferable (2) |  rvfi_mem_err                  |
+  +=====================+=========+================+================+================================+
+  | Load                | No      | N/A            | N/A            | data_err_i                     |
+  +---------------------+---------+----------------+----------------+--------------------------------+
+  | Load                | Yes     | N/A            | N/A            | data_err_i(1) OR data_err_i(2) |
+  +---------------------+---------+----------------+----------------+--------------------------------+
+  | Store               | No      | No             | N/A            | data_err_i                     |
+  +---------------------+---------+----------------+----------------+--------------------------------+
+  | Store               | No      | Yes            | N/A            | 0                              |
+  +---------------------+---------+----------------+----------------+--------------------------------+
+  | Store               | Yes     | No             | No             | data_err_i(1) OR data_err_i(2) |
+  +---------------------+---------+----------------+----------------+--------------------------------+
+  | Store               | Yes     | Yes            | Yes            | 0                              |
+  +---------------------+---------+----------------+----------------+--------------------------------+
+  | Store               | Yes     | Yes            | No             | data_err_i(2)                  |
+  +---------------------+---------+----------------+----------------+--------------------------------+
+  | Store               | Yes     | No             | Yes            | data_err_i(1)                  |
+  +---------------------+---------+----------------+----------------+--------------------------------+
+
+``rvfi_mem_rdata`` will report the read data for load instructions. In case of split misaligned transactions this read data is the combination of the two transfers.
 
 
 For cores as |corev| that support misaligned access ``rvfi_mem_addr`` will not always be 4 byte aligned. For misaligned accesses the start address of the transfer is reported (i.e. the start address of the first sub-transfer).
+
+.. note::
+  ``rvfi_mem_exokay`` and ``rvfi_mem_err`` will not be reported for bufferable writes (tied to zero). Bufferable writes may get their responses after the instructions have retired.
+
+.. note::
+  RVFI for |corev| currently has limited support for AMO instructions.
+  AMO instructions will only set ``rvfi_mem_wmask`` and not ``rvfi_mem_rmask``.
+  The value written to memory by AMO (read-modify-write) instructions is modified outside of |corev| before being written to memory. This results in the value of ``rvfi_mem_wdata`` to not reflect the value written to memory.
+  See :ref:`amo_operations` for details on AMO instructions.
 
 **CSR Signals**
 

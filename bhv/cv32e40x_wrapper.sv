@@ -37,6 +37,7 @@
   `include "cv32e40x_register_file_sva.sv"
   `include "cv32e40x_wpt_sva.sv"
   `include "cv32e40x_debug_triggers_sva.sv"
+  `include "cv32e40x_parameter_sva.sv"
 `endif
 
 `include "cv32e40x_wrapper.vh"
@@ -169,6 +170,18 @@ module cv32e40x_wrapper
 
   // RTL Assertions
 
+  bind cv32e40x_core: core_i cv32e40x_parameter_sva
+    #(
+      .PMA_NUM_REGIONS (PMA_NUM_REGIONS ),
+      .PMA_CFG         (PMA_CFG         ),
+      .DM_REGION_START (DM_REGION_START ),
+      .DM_REGION_END   (DM_REGION_END   ),
+      .DBG_NUM_TRIGGERS(DBG_NUM_TRIGGERS),
+      .CLIC_ID_WIDTH   (CLIC_ID_WIDTH   ),
+      .NUM_MHPMCOUNTERS(NUM_MHPMCOUNTERS)
+      )
+  param_sva(.*);
+
   bind cv32e40x_if_stage:
     core_i.if_stage_i cv32e40x_if_stage_sva #(.CLIC(CLIC)) if_stage_sva
     (
@@ -240,6 +253,7 @@ module cv32e40x_wrapper
                               .prefetch_valid_if_i          (core_i.if_stage_i.prefetch_valid),
                               .prefetch_is_tbljmp_ptr_if_i  (core_i.if_stage_i.prefetch_is_tbljmp_ptr),
                               .prefetch_is_mret_ptr_if_i    (core_i.if_stage_i.prefetch_is_mret_ptr),
+                              .prefetch_is_clic_ptr_if_i    (core_i.if_stage_i.prefetch_is_clic_ptr),
                               .lsu_trans_valid_i            (core_i.load_store_unit_i.trans_valid),
                               .csr_en_id_i                  (core_i.id_stage_i.csr_en),
                               .ptr_in_if_i                  (core_i.if_stage_i.ptr_in_if_o),
@@ -397,6 +411,8 @@ if (CLIC) begin : clic_asserts
                                  .ctrl_fsm_cs             (core_i.controller_i.controller_fsm_i.ctrl_fsm_cs),
                                  .ctrl_fsm                (core_i.ctrl_fsm),
                                  .dcsr                    (core_i.dcsr),
+                                 .ex_wb_pipe_i            (core_i.ex_wb_pipe),
+                                 .last_op_wb_i            (core_i.last_op_wb),
                                  .*);
 end
 endgenerate
@@ -617,6 +633,7 @@ endgenerate
          .lsu_pma_err_ex_i         ( core_i.load_store_unit_i.mpu_i.pma_i.pma_err_o                       ),
          .lsu_pma_atomic_ex_i      ( core_i.load_store_unit_i.mpu_i.pma_i.atomic_access_i                 ),
          .lsu_pma_cfg_ex_i         ( core_i.load_store_unit_i.mpu_i.pma_i.pma_cfg                         ),
+         .lsu_atomic_align_err_ex_i( core_i.load_store_unit_i.align_check_i.align_err                     ),
          .lsu_misaligned_ex_i      ( core_i.load_store_unit_i.misaligned_access                           ),
          .buffer_trans_ex_i        ( core_i.load_store_unit_i.buffer_trans                                ),
          .buffer_trans_valid_ex_i  ( core_i.load_store_unit_i.buffer_trans_valid                          ),
@@ -638,6 +655,8 @@ endgenerate
          .rf_addr_wb_i             ( core_i.wb_stage_i.rf_waddr_wb_o                                      ),
          .rf_wdata_wb_i            ( core_i.wb_stage_i.rf_wdata_wb_o                                      ),
          .lsu_rdata_wb_i           ( core_i.load_store_unit_i.lsu_rdata_1_o                               ),
+         .lsu_exokay_wb_i          ( core_i.load_store_unit_i.resp.bus_resp.exokay                        ),
+         .lsu_err_wb_i             ( core_i.load_store_unit_i.lsu_err_1_o                                 ),
          .abort_op_wb_i            ( core_i.wb_stage_i.abort_op_o                                         ),
          .clic_ptr_wb_i            ( core_i.wb_stage_i.ex_wb_pipe_i.instr_meta.clic_ptr                   ),
          .mret_ptr_wb_i            ( core_i.wb_stage_i.ex_wb_pipe_i.instr_meta.mret_ptr                   ),

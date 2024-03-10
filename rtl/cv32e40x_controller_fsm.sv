@@ -69,7 +69,7 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
 
   // From WB stage
   input  ex_wb_pipe_t   ex_wb_pipe_i,
-  input  logic [1:0]    lsu_err_wb_i,               // LSU caused bus_error in WB stage, gated with data_rvalid_i inside load_store_unit
+  input  lsu_err_wb_t   lsu_err_wb_i,               // LSU caused bus_error in WB stage, gated with data_rvalid_i inside load_store_unit
   input  logic          last_op_wb_i,               // WB stage contains the last operation of an instruction
   input  logic          abort_op_wb_i,              // WB stage contains an (to be) aborted instruction or sequence
   input  mpu_status_e   mpu_status_wb_i,            // MPU status (WB timing)
@@ -316,10 +316,10 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
   // EX stage
   // Branch taken for valid branch instructions in EX with valid decision
 
-  assign branch_in_ex = id_ex_pipe_i.alu_bch && id_ex_pipe_i.alu_en && id_ex_pipe_i.instr_valid && branch_decision_ex_i;
+  assign branch_in_ex = id_ex_pipe_i.alu_bch && id_ex_pipe_i.alu_en && id_ex_pipe_i.instr_valid;
 
   // Blocking on branch_taken_q, as a branch ha already been taken
-  assign branch_taken_ex = branch_in_ex && !branch_taken_q;
+  assign branch_taken_ex = branch_in_ex && !branch_taken_q && branch_decision_ex_i;
 
   // Exception in WB if the following evaluates to 1
   // Not checking for ex_wb_pipe_i.last_op to enable exceptions to be taken as soon as possible for
@@ -353,8 +353,8 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
                                 !dcsr_i.ebreakm && !debug_mode_q)                                                            ? EXC_CAUSE_BREAKPOINT       :
                               (mpu_status_wb_i == MPU_WR_FAULT)                                                              ? EXC_CAUSE_STORE_FAULT      :
                               (mpu_status_wb_i == MPU_RE_FAULT)                                                              ? EXC_CAUSE_LOAD_FAULT       :
-                              (align_status_wb_i == ALIGN_WR_ERR)                                                            ? EXC_CAUSE_STORE_MISALIGNED :
-                                                                                                                               EXC_CAUSE_LOAD_MISALIGNED;
+                              (align_status_wb_i == ALIGN_WR_ERR)                                                            ? EXC_CAUSE_STORE_FAULT      :
+                                                                                                                               EXC_CAUSE_LOAD_FAULT;
 
   assign ctrl_fsm_o.exception_cause_wb = exception_cause_wb;
 
@@ -378,10 +378,13 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
   // fence in wb
   assign fence_in_wb  = ex_wb_pipe_i.sys_en && ex_wb_pipe_i.sys_fence_insn && ex_wb_pipe_i.instr_valid;
 
-  // mret in wb - only valid when last_op_wb_i == 1 (which means only mret that did not cause a CLIC pointer fetch)
-  // Restricts CSR updates due to mret to not happen if the mret caused a CLIC pointer fetch, such CSR updates
-  // should only happen once the instruction fully completes (pointer arrives in WB).
-  assign mret_in_wb = ex_wb_pipe_i.sys_en && ex_wb_pipe_i.sys_mret_insn && ex_wb_pipe_i.instr_valid && last_op_wb_i;
+  // mret in wb - only valid when ex_wb_pipe_i.first_op == 1.
+  // Regular mret instruction will have first_op == last_op == 1.
+  // Mret with mcause.minhv==1 will restart a CLIC pointer fetch. The mret instruction will have first_op==1 && last_op==0
+  // while the pointer will finish the sequence with first_op==0 and last_op==1. The mret related CSR updates will happen
+  // once the mret instruction reaches WB. The pointer fetch may generate an exception, causing further CSR updates
+  // once the attempted pointer fetch reaches WB.
+  assign mret_in_wb = ex_wb_pipe_i.sys_en && ex_wb_pipe_i.sys_mret_insn && ex_wb_pipe_i.instr_valid && ex_wb_pipe_i.first_op;
 
   // CLIC pointer (caused by mret) in WB.
   assign mret_ptr_in_wb = ex_wb_pipe_i.instr_meta.mret_ptr && ex_wb_pipe_i.instr_valid;
@@ -414,12 +417,12 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
   // Using flopped version to avoid paths from data_err_i/data_rvalid_i to instr_* outputs
   assign pending_nmi = nmi_pending_q;
 
-  // Early version of the pending_nmi signal, using the unflopped lsu_err_wb_i[0]
+  // Early version of the pending_nmi signal, using the unflopped lsu_err_wb_i.bus_err
   // This signal is used for halting the ID stage in the same cycle as the bus error arrives.
   // This ensures that any instruction in the ID stage that may depend on the result of the faulted load
   // will not propagate to the EX stage. For cycles after lsu_err_wb_i[0] is
   // high, ID stage will be halted due to pending_nmi and !nmi_allowed.
-  assign pending_nmi_early =  lsu_err_wb_i[0];
+  assign pending_nmi_early =  lsu_err_wb_i.bus_err;
 
   // dcsr.nmip will always see a pending nmi if nmi_pending_q is set.
   // This CSR bit shall not be gated by debug mode or step without stepie
@@ -492,7 +495,7 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
   // If the core woke up from sleep due to interrupts, the wakeup reason will be honored
   // by not allowing async debug the cycle after wakeup.
   assign async_debug_allowed = lsu_interruptible_i && !fencei_ongoing && !xif_in_wb && !clic_ptr_in_pipeline && sequence_interruptible &&
-                               !woke_to_interrupt_q && !(ctrl_fsm_cs == SLEEP);
+                               !woke_to_interrupt_q && !csr_flush_ack_q && !(ctrl_fsm_cs == SLEEP);
 
   // synchronous debug entry have far fewer restrictions than asynchronous entries. In principle synchronous debug entry should have the same
   // 'allowed' signal as exceptions - that is it should always be possible.
@@ -551,13 +554,13 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
   // When a CLIC pointer is in the pipeline stages EX or WB, we must block interrupts.
   //   - Interrupt would otherwise kill the pointer and use the address of the pointer for mepc. A following mret would then return to the mtvt table, losing program progress.
   assign interrupt_allowed = lsu_interruptible_i && debug_interruptible && !fencei_ongoing && !xif_in_wb && !clic_ptr_in_pipeline &&
-                             sequence_interruptible && !interrupt_blanking_q && !(ctrl_fsm_cs == SLEEP);
+                             sequence_interruptible && !interrupt_blanking_q && !csr_flush_ack_q && !(ctrl_fsm_cs == SLEEP);
 
   // Allowing NMI's follow the same rule as regular interrupts, except we don't need to regard blanking of NMIs after a load/store.
   // If the core woke up from sleep due to either debug or regular interrupts, the wakeup reason is honored by not allowing NMIs in the cycle after
   // waking up to such an event.
   assign nmi_allowed = lsu_interruptible_i && debug_interruptible && !fencei_ongoing && !xif_in_wb && !clic_ptr_in_pipeline &&
-                       sequence_interruptible && !(woke_to_debug_q || woke_to_interrupt_q) && !(ctrl_fsm_cs == SLEEP);
+                       sequence_interruptible && !(woke_to_debug_q || woke_to_interrupt_q) && !csr_flush_ack_q && !(ctrl_fsm_cs == SLEEP);
 
   // Do not allow interrupts if in debug mode, or single stepping without dcsr.stepie set.
   assign debug_interruptible = !(debug_mode_q || (dcsr_i.step && !dcsr_i.stepie));
@@ -671,7 +674,6 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
     ctrl_fsm_o.kill_wb          = 1'b0;
 
     ctrl_fsm_o.csr_restore_mret = 1'b0;
-    ctrl_fsm_o.csr_restore_mret_ptr = 1'b0;
     ctrl_fsm_o.csr_restore_dret = 1'b0;
 
     ctrl_fsm_o.csr_save_cause   = 1'b0;
@@ -686,7 +688,6 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
     ctrl_fsm_o.debug_csr_save   = 1'b0;
     ctrl_fsm_o.debug_trigger_hit = '0;          // Mask of which triggers did hit.
     ctrl_fsm_o.debug_trigger_hit_update = 1'b0; // Signal that hit bits of mcontrol6 shall be written.
-    ctrl_fsm_o.block_data_addr  = 1'b0;
 
     // Single step halting of IF
     single_step_halt_if_n       = single_step_halt_if_q;
@@ -1044,12 +1045,6 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
             ctrl_fsm_o.csr_restore_mret  = !debug_mode_q;
           end
 
-          // For mret that caused a CLIC pointer fetch, CSR updates will happen once the pointer reaches WB.
-          // If the pointer has associated exceptions, the csr_restore_mret_ptr will not happen
-          if (mret_ptr_in_wb && !ctrl_fsm_o.kill_wb && !ctrl_fsm_o.halt_wb && !exception_in_wb) begin
-            ctrl_fsm_o.csr_restore_mret_ptr  = !debug_mode_q;
-          end
-
         end // !debug or interrupts
 
         // Single step debug entry or etrigger debug entry
@@ -1222,11 +1217,11 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
       nmi_pending_q <= 1'b0;
       nmi_is_store_q <= 1'b0;
     end else begin
-      if (lsu_err_wb_i[0] && !nmi_pending_q) begin
+      if (lsu_err_wb_i.bus_err && !nmi_pending_q) begin
         // Set whenever an error occurs in WB for the LSU, unless we already have an NMI pending.
         // Later errors could overwrite the bit for load/store type, and with mtval the address would be overwritten.
         nmi_pending_q <= 1'b1;
-        nmi_is_store_q <= lsu_err_wb_i[1];
+        nmi_is_store_q <= lsu_err_wb_i.store;
       // Clear when the controller takes the NMI
       end else if (ctrl_fsm_o.pc_set && (ctrl_fsm_o.pc_mux == PC_TRAP_NMI)) begin
         nmi_pending_q <= 1'b0;
@@ -1332,7 +1327,7 @@ module cv32e40x_controller_fsm import cv32e40x_pkg::*;
         // If debug entry is caused by a watchpoint address trigger, then abort_op_wb_i will be 1 and a debug entry is initiated.
         // This must also cause the sequence_in_progress_wb to be reset as the sequence is effectively terminated, although the instruction itself is not killed or completed
         // in a normal manner. As the WB stage is halted for debug entry on a watchcpoint trigger, wb_valid_i is zero.
-        if (ex_wb_pipe_i.instr_valid && wpt_match_wb_i && abort_op_wb_i) begin
+        if (ex_wb_pipe_i.instr_valid && (|wpt_match_wb_i) && abort_op_wb_i) begin
           sequence_in_progress_wb <= 1'b0;
         end
       end

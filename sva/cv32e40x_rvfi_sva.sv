@@ -86,6 +86,8 @@ module cv32e40x_rvfi_sva
    input logic [ 4*NMEM-1:0]  rvfi_mem_wmask,
    input logic [32*NMEM-1:0]  rvfi_mem_rdata,
    input logic [32*NMEM-1:0]  rvfi_mem_wdata,
+   input logic [ 1*NMEM-1:0]  rvfi_mem_exokay,
+   input logic [ 1*NMEM-1:0]  rvfi_mem_err,
    input logic [ 3*NMEM-1:0]  rvfi_mem_prot,
    input logic [ 6*NMEM-1:0]  rvfi_mem_atop,
    input logic [ 2*NMEM-1:0]  rvfi_mem_memtype,
@@ -121,6 +123,20 @@ module cv32e40x_rvfi_sva
   else
     `uvm_error("rvfi",
       $sformatf("Every irq_ack should be followed by the corresponding rvfi_intr"));
+
+  // rvfi_intr.intr shall also have rvfi_intr.exception or rvfi_intr.interrupt set at the same time
+  property p_rvfi_intr_interrupt_exception;
+    @(posedge clk_i) disable iff (!rst_ni)
+    rvfi_intr.intr
+      |->
+        (rvfi_intr.interrupt ||
+        rvfi_intr.exception);
+  endproperty : p_rvfi_intr_interrupt_exception
+
+  a_rvfi_intr_interrupt_exception: assert property (p_rvfi_intr_interrupt_exception)
+  else
+    `uvm_error("rvfi",
+      $sformatf("rvfi_intr.intr set without rvfi_intr.exception or rvfi_intr.interrupt"));
 
 
   // Sequence used to locate rvfi_valid following rvfi_valid with prereq set
@@ -253,7 +269,7 @@ if ((A_EXT == A) || (A_EXT == ZALRSC)) begin
   // cause_type MEM_ERR_IO_ALIGN
   //
   // Misaligned atomics which are otherwise not blocked by the PMA (cfg is main and atomic) shall use either
-  // EXC_CAUSE_LOAD_MISALIGNED or EXC_CAUSE_STORE_MISALIGNED with cause_type MEM_ERR_IO_ALIGN.
+  // EXC_CAUSE_LOAD_FAULT or EXC_CAUSE_STORE_FAULT with cause_type MEM_ERR_ATOMIC_MISALIGN.
   a_aligned_lr_access_fault_trap:
   assert property (@(posedge clk_i) disable iff (!rst_ni)
                   pc_mux_exception && (lsu_atomic_wb_i == AT_LR) && lsu_en_wb_i &&
@@ -270,8 +286,8 @@ if ((A_EXT == A) || (A_EXT == ZALRSC)) begin
                   lsu_split_q_wb_i
                   |=>
                   rvfi_valid &&
-                  ((rvfi_trap.cause_type == MEM_ERR_IO_ALIGN) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_LOAD_MISALIGNED))
+                  ((rvfi_trap.cause_type == MEM_ERR_ATOMIC_MISALIGN) &&
+                  (rvfi_trap.exception_cause == EXC_CAUSE_LOAD_FAULT))
                   or
                   ((rvfi_trap.cause_type == MEM_ERR_ATOMIC) &&
                   (rvfi_trap.exception_cause == EXC_CAUSE_LOAD_FAULT))
@@ -296,8 +312,8 @@ if ((A_EXT == A) || (A_EXT == ZALRSC)) begin
                   lsu_split_q_wb_i
                   |=>
                   rvfi_valid &&
-                  ((rvfi_trap.cause_type == MEM_ERR_IO_ALIGN) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_STORE_MISALIGNED))
+                  ((rvfi_trap.cause_type == MEM_ERR_ATOMIC_MISALIGN) &&
+                  (rvfi_trap.exception_cause == EXC_CAUSE_STORE_FAULT))
                   or
                   ((rvfi_trap.cause_type == MEM_ERR_ATOMIC) &&
                   (rvfi_trap.exception_cause == EXC_CAUSE_STORE_FAULT))
@@ -324,8 +340,8 @@ if (A_EXT == A) begin
                   lsu_split_q_wb_i
                   |=>
                   rvfi_valid &&
-                  ((rvfi_trap.cause_type == MEM_ERR_IO_ALIGN) &&
-                  (rvfi_trap.exception_cause == EXC_CAUSE_STORE_MISALIGNED))
+                  ((rvfi_trap.cause_type == MEM_ERR_ATOMIC_MISALIGN) &&
+                  (rvfi_trap.exception_cause == EXC_CAUSE_STORE_FAULT))
                   or
                   ((rvfi_trap.cause_type == MEM_ERR_ATOMIC) &&
                   (rvfi_trap.exception_cause == EXC_CAUSE_STORE_FAULT))
@@ -446,6 +462,8 @@ end
       bit [ 4*NMEM-1:0] wmask;
       bit [32*NMEM-1:0] rdata;
       bit [32*NMEM-1:0] wdata;
+      bit [ 1*NMEM-1:0] exokay;
+      bit [ 1*NMEM-1:0] err;
       bit [ 3*NMEM-1:0] prot;
       bit [ 6*NMEM-1:0] atop;
       bit [ 2*NMEM-1:0] memtype;
@@ -519,6 +537,8 @@ end
     assign rvfi_mem.wmask   = rvfi_mem_wmask;
     assign rvfi_mem.rdata   = rvfi_mem_rdata;
     assign rvfi_mem.wdata   = rvfi_mem_wdata;
+    assign rvfi_mem.exokay  = rvfi_mem_exokay;
+    assign rvfi_mem.err     = rvfi_mem_err;
     assign rvfi_mem.prot    = rvfi_mem_prot;
     assign rvfi_mem.atop    = rvfi_mem_atop;
     assign rvfi_mem.memtype = rvfi_mem_memtype;
@@ -635,6 +655,8 @@ end
       bit [31:0] split_2nd_wdata;
       bit [31:0] split_1st_rdata;
       bit [31:0] split_2nd_rdata;
+      bit        split_1st_err;
+      bit        split_2nd_err;
       bit [2:0]  split_2nd_shift;
 
       bit [$clog2(OBI_FIFO_SIZE)-1:0] rd_ptr_memop, rd_ptr_memop_inc;
@@ -647,6 +669,8 @@ end
         rvfi_mem_exp.wmask   [ 4*i_memop +:  4] = '0;
         rvfi_mem_exp.rdata   [32*i_memop +: 32] = '0;
         rvfi_mem_exp.wdata   [32*i_memop +: 32] = '0;
+        rvfi_mem_exp.exokay  [ 1*i_memop +:  1] = '0;
+        rvfi_mem_exp.err     [ 1*i_memop +:  1] = '0;
         rvfi_mem_exp.prot    [ 3*i_memop +:  3] = '0;
         rvfi_mem_exp.atop    [ 6*i_memop +:  6] = '0;
         rvfi_mem_exp.memtype [ 2*i_memop +:  2] = '0;
@@ -658,6 +682,8 @@ end
         split_2nd_wdata                      = '0;
         split_1st_rdata                      = '0;
         split_2nd_rdata                      = '0;
+        split_1st_err                        = '0;
+        split_2nd_err                        = '0;
 
         rd_ptr_memop                         = '0;
         rd_ptr_memop_inc                     = '0;
@@ -682,12 +708,18 @@ end
             split_1st_rdata    = data_obi_resp_fifo[rd_ptr_memop].rdata     & get_bitmask(data_obi_req_fifo[rd_ptr_memop].be);
             split_2nd_rdata    = data_obi_resp_fifo[rd_ptr_memop_inc].rdata & get_bitmask(data_obi_req_fifo[rd_ptr_memop_inc].be);
 
+            split_1st_err    = data_obi_resp_fifo[rd_ptr_memop].err[0] && !data_obi_req_fifo[rd_ptr_memop].memtype[0];
+            split_2nd_err    = data_obi_resp_fifo[rd_ptr_memop_inc].err[0] && !data_obi_req_fifo[rd_ptr_memop_inc].memtype[0];
+
             // Align rdata/wdata to correspond to expected rdata/wdata on RVFI
             rvfi_mem_exp.wdata[(32*i_memop) +: 32] = split_1st_wdata >> (8 * data_obi_req_fifo[rd_ptr_memop].addr[1:0]) |
                                                      split_2nd_wdata << (8 * split_2nd_shift);
 
             rvfi_mem_exp.rdata[(32*i_memop) +: 32] = split_1st_rdata >> (8 * data_obi_req_fifo[rd_ptr_memop].addr[1:0]) |
                                                      split_2nd_rdata << (8 * split_2nd_shift);
+
+            rvfi_mem_exp.err[( 1*i_memop) +:  1] = split_1st_err | split_2nd_err;
+
           end
           else begin
 
@@ -700,6 +732,8 @@ end
 
             rvfi_mem_exp.rdata[(32*i_memop) +: 32] = data_obi_resp_fifo[rd_ptr_memop].rdata >> (8 * data_obi_req_fifo[rd_ptr_memop].addr[1:0]);
 
+            rvfi_mem_exp.err  [(1*i_memop) +:   1] = data_obi_resp_fifo[rd_ptr_memop].err[0] && !data_obi_req_fifo[rd_ptr_memop].memtype[0];
+
           end
 
           // Addr and prot are equal for both transfers in a split transfer
@@ -708,6 +742,7 @@ end
           rvfi_mem_exp.atop   [(6*i_memop)  +: 6]  = data_obi_req_fifo[rd_ptr_memop].atop;
           rvfi_mem_exp.memtype[(2*i_memop)  +: 2]  = data_obi_req_fifo[rd_ptr_memop].memtype;
           rvfi_mem_exp.dbg    [(1*i_memop)  +: 1]  = data_obi_req_fifo[rd_ptr_memop].dbg;
+          rvfi_mem_exp.exokay [(1*i_memop)  +: 1]  = data_obi_resp_fifo[rd_ptr_memop].exokay && !data_obi_req_fifo[rd_ptr_memop].memtype[0];
 
           if(rvfi_mem_read[i_memop]) begin
             rvfi_mem_exp.rmask[(4*i_memop) +: 4] = exp_rvfi_mem_mask;
@@ -758,6 +793,17 @@ end
                         rvfi_mem_read[i_memop] |-> rvfi_mem_exp.dbg[(1*i_memop) +: 1] == rvfi_mem_dly.dbg[(1*i_memop) +: 1])
         else `uvm_error("rvfi", "rvfi_mem_dbg not consistent with OBI transfers for reads")
 
+      a_rvfi_mem_consistency_read_exokay:
+      assert property (@(posedge clk_i) disable iff (!rst_ni)
+                        rvfi_mem_read[i_memop] |-> rvfi_mem_exp.exokay[(1*i_memop) +: 1] == rvfi_mem_dly.exokay[(1*i_memop) +: 1])
+        else `uvm_error("rvfi", "rvfi_mem_exokay not consistent with OBI transfers for reads")
+
+      a_rvfi_mem_consistency_read_err:
+      assert property (@(posedge clk_i) disable iff (!rst_ni)
+                        rvfi_mem_read[i_memop] |-> rvfi_mem_exp.err[(1*i_memop) +: 1] == rvfi_mem_dly.err[(1*i_memop) +: 1])
+        else `uvm_error("rvfi", "rvfi_mem_err not consistent with OBI transfers for reads")
+
+
       a_rvfi_mem_consistency_write_addr:
       assert property (@(posedge clk_i) disable iff (!rst_ni)
                      obi_gnt_delay_ok && rvfi_mem_write[i_memop] |-> rvfi_mem_exp.addr[(32*i_memop) +: 32] == rvfi_mem_dly.addr[(32*i_memop) +: 32])
@@ -794,6 +840,17 @@ end
       assert property (@(posedge clk_i) disable iff (!rst_ni)
                        obi_gnt_delay_ok && rvfi_mem_write[i_memop] |-> rvfi_mem_exp.dbg[(1*i_memop) +: 1] == rvfi_mem_dly.dbg[(1*i_memop) +: 1])
         else `uvm_error("rvfi", "rvfi_mem_dbg not consistent with OBI transfers for writes")
+
+      a_rvfi_mem_consistency_write_exokay:
+      assert property (@(posedge clk_i) disable iff (!rst_ni)
+                       obi_gnt_delay_ok && rvfi_mem_write[i_memop] |-> rvfi_mem_exp.exokay[(1*i_memop) +: 1] == rvfi_mem_dly.exokay[(1*i_memop) +: 1])
+        else `uvm_error("rvfi", "rvfi_mem_exokay not consistent with OBI transfers for writes")
+
+      a_rvfi_mem_consistency_write_err:
+      assert property (@(posedge clk_i) disable iff (!rst_ni)
+                       obi_gnt_delay_ok && rvfi_mem_write[i_memop] |-> rvfi_mem_exp.err[(1*i_memop) +: 1] == rvfi_mem_dly.err[(1*i_memop) +: 1])
+        else `uvm_error("rvfi", "rvfi_mem_err not consistent with OBI transfers for writes")
+
     end
 
   endgenerate

@@ -41,6 +41,8 @@ module cv32e40x_controller_fsm_sva
   input ctrl_fsm_t      ctrl_fsm_o,
   input ctrl_byp_t      ctrl_byp_i,
   input logic           jump_taken_id,
+  input logic           branch_in_ex,
+  input logic           branch_taken_q,
   input logic           branch_taken_ex,
   input logic           branch_decision_ex_i,
   input ctrl_state_e    ctrl_fsm_cs,
@@ -61,7 +63,7 @@ module cv32e40x_controller_fsm_sva
   input logic           csr_illegal_i,
   input logic           pending_single_step,
   input logic           trigger_match_in_wb,
-  input logic [1:0]     lsu_err_wb_i,
+  input lsu_err_wb_t    lsu_err_wb_i,
   input logic           wb_valid_i,
   input logic           fencei_in_wb,
   input logic           fencei_flush_req_o,
@@ -99,6 +101,7 @@ module cv32e40x_controller_fsm_sva
   input logic           prefetch_valid_if_i,
   input logic           prefetch_is_tbljmp_ptr_if_i,
   input logic           prefetch_is_mret_ptr_if_i,
+  input logic           prefetch_is_clic_ptr_if_i,
   input logic           abort_op_id_i,
   input mcause_t        mcause_i,
   input logic           lsu_trans_valid_i,
@@ -179,6 +182,19 @@ module cv32e40x_controller_fsm_sva
   endproperty : p_jalr_stable_target
 
   a_jalr_stable_target: assert property(p_jalr_stable_target) else `uvm_error("controller", "Assertion a_jalr_stable_target failed");
+
+  // Check that a JALR instruction which reads x0 gets zero as result on jalr_fw_id_i.
+  property p_jalr_target_x0;
+    logic [4:0] jalr_rs_id;
+    logic [31:0] rf_at_jump_id;
+    @(posedge clk) disable iff (!rst_n)
+      (jump_taken && alu_jmpr_id_i && !(|if_id_pipe_i.instr.bus_resp.rdata[19:15])
+      |->
+      jalr_fw_id_i == 32'd0);
+
+  endproperty : p_jalr_target_x0
+
+  a_jalr_target_x0: assert property(p_jalr_target_x0) else `uvm_error("controller", "Assertion a_jalr_target_x0 failed");
 
   // Check that xret does not coincide with CSR write (to avoid using wrong return address)
   // This check is more strict than really needed; a CSR instruction would be allowed in EX as long
@@ -266,19 +282,19 @@ module cv32e40x_controller_fsm_sva
           (ex_wb_pipe_i.sys_en && (ex_wb_pipe_i.sys_wfi_insn || ex_wb_pipe_i.sys_wfe_insn) && ex_wb_pipe_i.instr_valid) |-> !(id_ex_pipe_i.lsu_en) )
     else `uvm_error("controller", "LSU instruction follows WFI or WFE")
 
-  // Check that lsu_err_wb_i==2'b01 (load error) can only be true when an LSU instruction is valid in WB
+  // Check that a load error can only be true when an LSU instruction is valid in WB
   // Not using wb_valid, as that is only active for the second half of misaligned.
   // bus error may also be active on the first half, thus checking only for active LSU in WB.
   a_lsu_load_err_wb :
     assert property (@(posedge clk) disable iff (!rst_n)
-            lsu_err_wb_i == 2'b01                                 // Upon LSU error on load
+            (lsu_err_wb_i.bus_err && !lsu_err_wb_i.store)         // Upon LSU error on load
             |-> ex_wb_pipe_i.instr_valid && ex_wb_pipe_i.lsu_en)  // There must be a valid LSU instruction in WB
       else `uvm_error("controller", "LSU load error in WB with no valid LSU instruction")
 
-  // Check that lsu_err_wb_i==2'b11 (store error) can only be true when an LSU instruction is valid in WB, or there's an outstanding OBI transfer
+  // Check that a store error can only be true when an LSU instruction is valid in WB, or there's an outstanding OBI transfer
   a_lsu_store_err_wb :
     assert property (@(posedge clk) disable iff (!rst_n)
-            lsu_err_wb_i == 2'b11                                 // Upon LSU error on store
+            (lsu_err_wb_i.bus_err && lsu_err_wb_i.store)          // Upon LSU error on store
             |-> (ex_wb_pipe_i.instr_valid && ex_wb_pipe_i.lsu_en) // There must be a valid LSU instruction in WB
             ||  (response_filter_bus_cnt_q_i != '0))              // Or an outstanding transfer on the bus (taking buffered writes into account)
       else `uvm_error("controller", "LSU store error in WB with no valid LSU instruction or outstanding transfers on the bus")
@@ -328,6 +344,54 @@ module cv32e40x_controller_fsm_sva
     assert property (@(posedge clk) disable iff (!rst_n)
                      fencei_flush_req_o |-> !lsu_busy_i)
       else `uvm_error("controller", "Fencei handshake active while lsu_busy_o = 1")
+
+  // Check that mret in debug mode results in illegal instruction exception
+  a_mret_dbg_mode_illegal :
+    assert property (@(posedge clk) disable iff (!rst_n)
+                     // Disregard higher priority exceptions and trigger match
+                      !((ex_wb_pipe_i.instr.mpu_status != MPU_OK) || ex_wb_pipe_i.instr.bus_resp.err || trigger_match_in_wb) &&
+                      // Check for mret in instruction word and debug mode
+                      ((ex_wb_pipe_i.instr.bus_resp.rdata == 32'h30200073) && debug_mode_q && wb_valid_i)
+                      |-> exception_in_wb && (exception_cause_wb == EXC_CAUSE_ILLEGAL_INSN))
+      else `uvm_error("controller", "mret in debug mode not flagged as illegal")
+
+  // Helper logic to make assertion look cleaner
+  // Same logic as in the bypass module, but duplicated here to catch any changes in bypass
+  // that could lead to undetected errors
+  logic csrw_ex_wb;
+  assign csrw_ex_wb = (
+                        ((id_ex_pipe_i.csr_en || (id_ex_pipe_i.sys_en && id_ex_pipe_i.sys_mret_insn)) && id_ex_pipe_i.instr_valid) ||
+                        ((ex_wb_pipe_i.csr_en || (ex_wb_pipe_i.sys_en && ex_wb_pipe_i.sys_mret_insn)) && ex_wb_pipe_i.instr_valid)
+                      );
+
+  // Check that mret is stalled in ID if CSR writes (explicit and implicit)
+  // are present in EX or WB. Exluding the case where the second part of an mret is in ID while the first part
+  // is in either EX or WB.
+  a_mret_id_halt :
+  assert property (@(posedge clk) disable iff (!rst_n)
+                    ((sys_en_id_i && sys_mret_id_i) && if_id_pipe_i.instr_valid && csrw_ex_wb)
+                    |-> (!id_valid_i && ctrl_fsm_o.halt_id))
+    else `uvm_error("controller", "mret not halted in ID when CSR write is present in EX or WB")
+
+  // Assert that branches (that are not already taken) are always taken in the first cycle of EX, unless EX is killed or halted
+  // What we really want to check with this assertion is that a branch taken always results
+  // in a pc_set to PC_BRANCH.
+  // If the branch is not taken in the first cycle of EX, caution must be taken to avoid e.g. a jump in
+  // ID taking presedence over the branch in EX.
+
+  a_branch_in_ex_taken_first_cycle:
+  assert property (@(posedge clk) disable iff (!rst_n)
+                    ($rose(branch_in_ex && branch_decision_ex_i) && !branch_taken_q && !(ctrl_fsm_o.halt_ex || ctrl_fsm_o.kill_ex) |->
+                    ctrl_fsm_o.pc_set && (ctrl_fsm_o.pc_mux == PC_BRANCH) &&
+                    ctrl_fsm_o.kill_if && ctrl_fsm_o.kill_id));
+
+  // When flushing the pipeline due to CSR updates in WB, make sure there we don't initiate transactions on the data interface
+  // and that there are no outstanding transactions from the LSU point of view.
+  // There might still be outstanding transactions in the write buffer, which is why we can't check that data_req_o==0
+  a_csr_wr_in_wb_flush_no_obi:
+  assert property (@(posedge clk) disable iff (!rst_n)
+                    (csr_wr_in_wb_flush_i) |-> (lsu_outstanding_cnt == 2'b00) && !lsu_trans_valid_i)
+    else `uvm_error("controller", "Flushing pipeline when the LSU have outstanding transactions")
 
   // assert that NMI's are not reported on irq_ack
   // Exception for the case where the core wakes from SLEEP due to an interrupt
@@ -744,23 +808,17 @@ end
   end
 
   // Check if we are allowed to halt the ID stage.
-  // If ID stage contains a non-first operation, we cannot halt ID as that
+  // If ID stage contains a non-first, non-aborted operation, we cannot halt ID as that
   // could cause a deadlock because a sequence cannot finish through ID.
-  // If ID stage does not contain a valid instruction, the same check is performed
-  // for the IF stage (although this is likely not needed).
-  // todo: This logic currently does not match the RTL version when not gating instruction in IF due to exceptions.
-  //       Assertions checking SVA vs RTL commented out.
   logic id_stage_haltable_alt;
   always_comb begin
     if (if_id_pipe_i.instr_valid) begin
-      id_stage_haltable_alt = first_op_id_i;
-    end else if (prefetch_valid_if_i) begin
-      id_stage_haltable_alt = first_op_if_i;
+      id_stage_haltable_alt = first_op_id_i || if_id_pipe_i.abort_op;
     end else begin
-      // If no instruction is ready in the whole pipeline (including IF), then there are nothing in progress
-      // and we should safely be able to halt ID unless the IF stage is waiting for a table jump pointer or
-      // a CLIC pointer that is a side effect of an mret
-      id_stage_haltable_alt = !(prefetch_is_tbljmp_ptr_if_i || prefetch_is_mret_ptr_if_i);
+      // If no instruction is ready in ID, then there is nothing in progress
+      // and we should safely be able to halt ID unless the IF stage is waiting for a table jump pointer,
+      // mret pointer or CLIC pointer
+      id_stage_haltable_alt = !(prefetch_is_tbljmp_ptr_if_i || prefetch_is_mret_ptr_if_i || prefetch_is_clic_ptr_if_i);
     end
   end
 
@@ -808,14 +866,13 @@ end
                     (sequence_in_progress_wb |-> !ctrl_fsm_o.kill_wb))
     else `uvm_error("controller", "WB killed while sequence was in progress")
 
-/* todo: Bring back in if id_stage_haltable_alt can be correctly calculated.
   // Check that we do not allow ID stage to be halted for pending interrupts/debug if a sequence is not done
   // in the ID stage.
   a_id_stage_haltable:
   assert property (@(posedge clk) disable iff (!rst_n)
-                    (id_stage_haltable_alt == id_stage_haltable))
+                    (id_stage_haltable |-> id_stage_haltable_alt))
     else `uvm_error("controller", "id_stage_haltable not correct")
-*/
+
   // Assert that we have no pc_set in the same cycle as a CSR write in WB requires flushing of the pipeline
   a_csr_wr_in_wb_no_fetch:
   assert property (@(posedge clk) disable iff (!rst_n)

@@ -36,17 +36,17 @@ It follows these specifications:
 .. [RISC-V-UNPRIV] RISC-V Instruction Set Manual, Volume I: User-Level ISA, Document Version 20191213 (December 13, 2019),
    https://github.com/riscv/riscv-isa-manual/releases/download/Ratified-IMAFDQC/riscv-spec-20191213.pdf
 
-.. [RISC-V-PRIV] RISC-V Instruction Set Manual, Volume II: Privileged Architecture, Document Version 20211105-signoff (November 5, 2021),
-   https://github.com/riscv/riscv-isa-manual/releases/download/draft-20211105-c30284b/riscv-privileged.pdf
+.. [RISC-V-PRIV] RISC-V Instruction Set Manual, Volume II: Privileged Architecture, Document Version 20211203 (December 4, 2021),
+   https://github.com/riscv/riscv-isa-manual/releases/download/Priv-v1.12/riscv-privileged-20211203.pdf
 
 .. [RISC-V-RV32E] RISC-V Instruction Set Manual, Volume I: User-Level ISA, RV32E Base Integer Instruction Set, Document version 20191214-draft (January 31, 2023),
    https://github.com/riscv/riscv-isa-manual/releases/download/draft-20230131-c0b298a/riscv-spec.pdf
 
-.. [RISC-V-DEBUG] RISC-V Debug Support, version 1.0-STABLE, bd6b01948dcd948ef280d83747eec560d1e7795f, June 23 2023,
-   https://github.com/riscv/riscv-debug-spec/blob/3c75bf39ed8d82e4e25191980966f8c701763fc2/riscv-debug-stable.pdf
+.. [RISC-V-DEBUG] RISC-V Debug Support, version 1.0-STABLE, ece9f185e7e348aafca75418d0f1540b2dfd0ff6, November 7 2023,
+   https://github.com/riscv/riscv-debug-spec/blob/24d2ea065737fc184670a6d09fb314e1a66109f5/riscv-debug-stable.pdf
 
-.. [RISC-V-CLIC] Core-Local Interrupt Controller (CLIC) RISC-V Privileged Architecture Extensions, version 0.9-draft, 8/1/2023,
-   https://github.com/riscv/riscv-fast-interrupt/blob/a187c10e07604bce977546f8ebdf362e35bcad27/clic.pdf
+.. [RISC-V-CLIC] Core-Local Interrupt Controller (CLIC) RISC-V Privileged Architecture Extensions, version 0.9-draft, 10/10/2023,
+   https://github.com/riscv/riscv-fast-interrupt/blob/514ddb112c8f9418ca6850d90292d4c1f9807049/clic.pdf
 
 .. [RISC-V-ZBA_ZBB_ZBC_ZBS] RISC-V Bit Manipulation ISA-extensions, Version 1.0.0-38-g865e7a7, 2021-06-28,
    https://github.com/riscv/riscv-bitmanip/releases/download/1.0.0/bitmanip-1.0.0-38-g865e7a7.pdf
@@ -68,7 +68,7 @@ It follows these specifications:
 
 Many features in the RISC-V specification are optional, and |corev| can be parameterized to enable or disable some of them.
 
-|corev| supports one of the following base integer instruction sets: 
+|corev| supports one of the following base integer instruction sets:
 
 .. list-table:: |corev| Base Instruction Set
    :header-rows: 1

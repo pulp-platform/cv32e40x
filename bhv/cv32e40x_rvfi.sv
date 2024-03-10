@@ -82,6 +82,7 @@ module cv32e40x_rvfi
    input logic                                lsu_pma_err_ex_i,
    input logic                                lsu_pma_atomic_ex_i,
    input pma_cfg_t                            lsu_pma_cfg_ex_i,
+   input logic                                lsu_atomic_align_err_ex_i,
    input logic                                lsu_misaligned_ex_i,
    input obi_data_req_t                       buffer_trans_ex_i,
    input logic                                buffer_trans_valid_ex_i,
@@ -104,6 +105,8 @@ module cv32e40x_rvfi
    input logic [4:0]                          rf_addr_wb_i,
    input logic [31:0]                         rf_wdata_wb_i,
    input logic [31:0]                         lsu_rdata_wb_i,
+   input logic                                lsu_exokay_wb_i,
+   input lsu_err_wb_t                         lsu_err_wb_i,
    input logic                                mret_ptr_wb_i,
    input logic                                clic_ptr_wb_i,
    input logic                                csr_mscratchcsw_in_wb_i,
@@ -328,6 +331,8 @@ module cv32e40x_rvfi
    output logic [ 4*NMEM-1:0]                 rvfi_mem_wmask,
    output logic [32*NMEM-1:0]                 rvfi_mem_rdata,
    output logic [32*NMEM-1:0]                 rvfi_mem_wdata,
+   output logic [ 1*NMEM-1:0]                 rvfi_mem_exokay,
+   output logic [ 1*NMEM-1:0]                 rvfi_mem_err,
    output logic [ 3*NMEM-1:0]                 rvfi_mem_prot,
    output logic [ 6*NMEM-1:0]                 rvfi_mem_atop,
    output logic [ 2*NMEM-1:0]                 rvfi_mem_memtype,
@@ -621,10 +626,12 @@ module cv32e40x_rvfi
   logic [31:0]       pc_wb_past;
   logic [4:0]        rd_addr_wb_past;
   logic [31:0]       rd_wdata_wb_past;
+  privlvl_t          priv_lvl_wb_past;
 
 
   //Propagating from EX stage
   obi_data_req_t     ex_mem_trans;
+  obi_data_req_t     ex_mem_trans_2;
   mem_err_t [3:0]    mem_err;
 
   logic              lsu_split_2nd_xfer_wb;
@@ -653,6 +660,12 @@ module cv32e40x_rvfi
   rvfi_csr_map_t rvfi_csr_rmask;
   rvfi_csr_map_t rvfi_csr_wdata;
   rvfi_csr_map_t rvfi_csr_wmask;
+
+  // CSR inputs for handling mret pointers with mret in WB_PAST stage
+  rvfi_csr_map_t rvfi_csr_rdata_wb_past;
+  rvfi_csr_map_t rvfi_csr_wdata_wb_past;
+  rvfi_csr_map_t rvfi_csr_rmask_wb_past;
+  rvfi_csr_map_t rvfi_csr_wmask_wb_past;
 
   // Reads from autonomous registers propagate from EX stage
   rvfi_auto_csr_map_t ex_csr_rdata;
@@ -730,6 +743,7 @@ module cv32e40x_rvfi
   assign insn_rs2    = rvfi_insn[24:20];
   assign insn_funct7 = rvfi_insn[31:25];
   assign insn_csr    = rvfi_insn[31:20];
+
 
   cv32e40x_rvfi_instr_obi
   rvfi_instr_obi_i
@@ -847,7 +861,7 @@ module cv32e40x_rvfi
       // Indicate synchronous (non-debug entry) trap
       rvfi_trap_next.exception       = 1'b1;
       rvfi_trap_next.exception_cause = ctrl_fsm_i.csr_cause.exception_code[5:0]; // All synchronous exceptions fit in lower 6 bits
-      rvfi_trap_next.clicptr         = clic_ptr_wb_i;
+      rvfi_trap_next.clicptr         = clic_ptr_wb_i || mret_ptr_wb_i;
 
       // Separate exception causes with the same exception cause code
       case (ctrl_fsm_i.csr_cause.exception_code)
@@ -863,12 +877,6 @@ module cv32e40x_rvfi
         end
         EXC_CAUSE_STORE_FAULT : begin
           rvfi_trap_next.cause_type = mem_err[STAGE_WB];
-        end
-        EXC_CAUSE_LOAD_MISALIGNED : begin
-          rvfi_trap_next.cause_type = 2'h0;
-        end
-        EXC_CAUSE_STORE_MISALIGNED : begin
-          rvfi_trap_next.cause_type = 2'h0;
         end
         default : begin
           // rvfi_trap_next.cause_type is only set for exception codes that can have multiple causes
@@ -950,6 +958,7 @@ module cv32e40x_rvfi
       mem_rmask          <= '0;
       mem_wmask          <= '0;
       ex_mem_trans       <= '0;
+      ex_mem_trans_2     <= '0;
       mem_err            <= {4{MEM_ERR_IO_ALIGN}};
       ex_csr_rdata       <= '0;
       rvfi_dbg           <= '0;
@@ -979,6 +988,8 @@ module cv32e40x_rvfi
       rvfi_mem_rdata     <= '0;
       rvfi_mem_wmask     <= '0;
       rvfi_mem_wdata     <= '0;
+      rvfi_mem_exokay    <= '0;
+      rvfi_mem_err       <= '0;
       rvfi_mem_prot      <= '0;
       rvfi_mem_memtype   <= '0;
       rvfi_mem_atop      <= '0;
@@ -1174,16 +1185,21 @@ module cv32e40x_rvfi
         lsu_split_xfer_wb     <= lsu_split_0_ex_i;
 
         if (!lsu_split_q_ex_i) begin
-          // The second part of the split misaligned access is suppressed to keep
+          // The first part of the split misaligned access is preserved to keep
           // the start address and data for the whole misaligned transfer
           ex_mem_trans <= lsu_data_trans;
+        end else begin
+          // ex_mem_trans_2 holds the second part of the split misaligned access.
+          // (We only use this signal to check the obi packet's memtype)
+          ex_mem_trans_2 <= lsu_data_trans;
         end
 
         // Capture cause of LSU exception for the cases that can have multiple reasons for an exception
         // These are currently load and store access faults trigger by misaligned access to i/o regions,
         // atomic accesses to regions not enabled for atomics or accesses blocked by PMP.
-        mem_err [STAGE_WB]  = lsu_pma_err_misaligned_ex    ? MEM_ERR_IO_ALIGN          : // Non-natrually aligned access to !main
+        mem_err [STAGE_WB]  = lsu_pma_err_misaligned_ex    ? MEM_ERR_IO_ALIGN          : // Non-naturally aligned access to !main
                               lsu_pma_err_atomic_ex        ? MEM_ERR_ATOMIC            : // Any atomic to non-atomic PMA region
+                              lsu_atomic_align_err_ex_i    ? MEM_ERR_ATOMIC_MISALIGN   : // Misaligned atomic
                                                              MEM_ERR_PMP;                // PMP error
 
         // Read autonomuos CSRs from EX perspective
@@ -1213,7 +1229,7 @@ module cv32e40x_rvfi
         rvfi_rd_wdata   <= mret_ptr_wb ? rd_wdata_wb_past : rd_wdata_wb;
 
         // Read/Write CSRs
-        // No mret pointer muxing, CSR updates for mret with CLIC pointer happens when the pointer reachces WB.
+        // Muxing values for mret/mret pointers happens on the inputs (*_d) below
         rvfi_csr_rdata  <= rvfi_csr_rdata_d;
         rvfi_csr_rmask  <= rvfi_csr_rmask_d;
         rvfi_csr_wdata  <= rvfi_csr_wdata_d;
@@ -1229,7 +1245,7 @@ module cv32e40x_rvfi
         rvfi_instr_memtype <= mret_ptr_wb ? instr_req[STAGE_WB_PAST].memtype : instr_req[STAGE_WB].memtype;
         rvfi_instr_dbg     <= mret_ptr_wb ? instr_req[STAGE_WB_PAST].dbg     : instr_req[STAGE_WB].dbg;
 
-        rvfi_mode      <= priv_lvl_i;
+        rvfi_mode      <= mret_ptr_wb ? priv_lvl_wb_past : priv_lvl_i;
 
         rvfi_dbg       <= mret_ptr_wb ? debug_cause[STAGE_WB_PAST] : debug_cause[STAGE_WB];
         rvfi_dbg_mode  <= mret_ptr_wb ? debug_mode [STAGE_WB_PAST] : debug_mode[STAGE_WB];
@@ -1257,6 +1273,14 @@ module cv32e40x_rvfi
         rd_addr_wb_past             <= rd_addr_wb;
         rd_wdata_wb_past            <= rd_wdata_wb;
 
+        // Remember CSR reads/writes for instruction in WB
+        rvfi_csr_rdata_wb_past <= rvfi_csr_rdata_d;
+        rvfi_csr_wdata_wb_past <= rvfi_csr_wdata_d;
+        rvfi_csr_rmask_wb_past <= rvfi_csr_rmask_d;
+        rvfi_csr_wmask_wb_past <= rvfi_csr_wmask_d;
+
+        priv_lvl_wb_past       <= priv_lvl_i;
+
         // Clear rvfi_mem and rvfi_gpr on first op
         if (first_op_wb_i) begin
           rvfi_mem_addr      <= '0;
@@ -1264,6 +1288,8 @@ module cv32e40x_rvfi
           rvfi_mem_rdata     <= '0;
           rvfi_mem_wmask     <= '0;
           rvfi_mem_wdata     <= '0;
+          rvfi_mem_exokay    <= '0;
+          rvfi_mem_err       <= '0;
           rvfi_mem_prot      <= '0;
           rvfi_mem_atop      <= '0;
           rvfi_mem_memtype   <= '0;
@@ -1290,7 +1316,27 @@ module cv32e40x_rvfi
           rvfi_mem_atop    [ ((4*memop_cnt) + (2*memop_cnt)) +:  6] <= ex_mem_trans.atop;
           rvfi_mem_memtype [ (2*(memop_cnt+1))-1 -:  2]  <= ex_mem_trans.memtype;
           rvfi_mem_dbg     [ (1*(memop_cnt+1))-1 -:  1]  <= ex_mem_trans.dbg;
+
+
+          // Report OBI exokay and err on RVFI for all read transactions, for non-bufferable write transactions, and for all atomic transactions (which are always treated as non-bufferable).
+          // For bufferable write transactions exokay and err are reported as 0 on RVFI (no matter what is signaled over OBI) as the response for bufferable write transactions is not
+          // guaranteed to be received in time to be reported on RVFI together with the instruction retirement.
+          //
+          // The err response for bufferable write transactions can lead to an NMI. The exokay response for bufferable write transactions is ignored by the CPU (in fact it is also
+          // ignored for most other transactions as it is only used for SC.W instructions).
+
+          rvfi_mem_exokay  [ (1*(memop_cnt+1))-1 -:  1] <= !mem_access_blocked_wb && (|mem_rmask [STAGE_WB] || (|mem_wmask [STAGE_WB] && !ex_mem_trans.memtype[0])) ? lsu_exokay_wb_i      : '0;
+          rvfi_mem_err     [ (1*(memop_cnt+1))-1 -:  1] <= !mem_access_blocked_wb && (|mem_rmask [STAGE_WB] || (|mem_wmask [STAGE_WB] && !ex_mem_trans.memtype[0])) ? lsu_err_wb_i.bus_err : '0;
         end
+
+        else if (lsu_split_2nd_xfer_wb && !mem_access_blocked_wb) begin
+          // For split access, rvfi_mem_err and rvfi_mem_exokay are based on both misaligned accesses.
+          // But, as mentioned above, we disregard the reported OBI err and exokay signals from bufferable write transactions.
+
+          rvfi_mem_exokay  [ (1*(memop_cnt+1))-1 -:  1] <= rvfi_mem_exokay[ (1'b1*(memop_cnt+1'b1))-1'b1 -:  1] && ((|mem_rmask [STAGE_WB] || (|mem_wmask [STAGE_WB] && !ex_mem_trans_2.memtype[0])) ? lsu_exokay_wb_i      : '0);
+          rvfi_mem_err     [ (1*(memop_cnt+1))-1 -:  1] <= rvfi_mem_err   [ (1'b1*(memop_cnt+1'b1))-1'b1 -:  1] || ((|mem_rmask [STAGE_WB] || (|mem_wmask [STAGE_WB] && !ex_mem_trans_2.memtype[0])) ? lsu_err_wb_i.bus_err : '0);
+        end
+
         else if (lsu_split_2nd_xfer_wb && mem_access_blocked_wb) begin
           // 2nd transfer of a split misaligned is blocked. Clear related bits in rmask/wmask
           rvfi_mem_rmask[ (4*(memop_cnt+1))-1 -:  4] <= rvfi_mem_rmask[ (4*(memop_cnt+1))-1 -:  4] & ~split_2nd_mask(rvfi_mem_addr[1:0]);
@@ -1299,7 +1345,7 @@ module cv32e40x_rvfi
 
         // Propagate rdata from LSU to rvfi_mem.
         // For split misaligned transfers, lsu_rdata_wb_i is valid when the 2nd transfer has completed
-        rvfi_mem_rdata[(32*(memop_cnt+1))-1 -: 32] <= lsu_rdata_wb_i;
+        rvfi_mem_rdata [(32*(memop_cnt+1))-1 -: 32] <= lsu_rdata_wb_i;
 
         // Update rvfi_gpr for writes to RF
         if (rf_we_wb_i) begin
@@ -1415,10 +1461,14 @@ module cv32e40x_rvfi
   assign rvfi_csr_wmask_d.jvt                = csr_jvt_we_i ? '1 : '0;
 
   // Machine trap setup
-  assign rvfi_csr_rdata_d.mstatus            = csr_mstatus_q_i;
+  // If an mret pointer is in WB, capture CSR rdata as seen by the mret instruction.
+  // Write mask/data are either from the mret (if pointer fetch is successful) or the pointer fetch  (if it generates an exception)
+  assign rvfi_csr_rdata_d.mstatus            = mret_ptr_wb ? rvfi_csr_rdata_wb_past.mstatus : csr_mstatus_q_i;
   assign rvfi_csr_rmask_d.mstatus            = '1;
-  assign rvfi_csr_wdata_d.mstatus            = csr_mstatus_n_i;
-  assign rvfi_csr_wmask_d.mstatus            = csr_mstatus_we_i ? '1 : '0;
+  assign rvfi_csr_wdata_d.mstatus            = mret_ptr_wb ? (csr_mstatus_we_i ? csr_mstatus_n_i : rvfi_csr_wdata_wb_past.mstatus)
+                                                           : csr_mstatus_n_i;
+  assign rvfi_csr_wmask_d.mstatus            = mret_ptr_wb ? (csr_mstatus_we_i ? '1 : rvfi_csr_wmask_wb_past.mstatus)
+                                                           : (csr_mstatus_we_i ? '1 : '0);
 
   assign rvfi_csr_rdata_d.mstatush           = csr_mstatush_q_i;
   assign rvfi_csr_rmask_d.mstatush           = '1;
@@ -1470,10 +1520,14 @@ module cv32e40x_rvfi
   assign rvfi_csr_wdata_d.mepc               = csr_mepc_n_i;
   assign rvfi_csr_wmask_d.mepc               = csr_mepc_we_i ? '1 : '0;
 
-  assign rvfi_csr_rdata_d.mcause             = csr_mcause_q_i;
+  // If an mret pointer is in WB, capture CSR rdata as seen by the mret instruction.
+  // Write mask/data are either from the mret (if pointer fetch is successful) or the pointer fetch  (if it generates an exception)
+  assign rvfi_csr_rdata_d.mcause             = mret_ptr_wb ? rvfi_csr_rdata_wb_past.mcause : csr_mcause_q_i;
   assign rvfi_csr_rmask_d.mcause             = '1;
-  assign rvfi_csr_wdata_d.mcause             = csr_mcause_n_i;
-  assign rvfi_csr_wmask_d.mcause             = csr_mcause_we_i ? '1 : '0;
+  assign rvfi_csr_wdata_d.mcause             = mret_ptr_wb ? (csr_mcause_we_i ? csr_mcause_n_i : rvfi_csr_wdata_wb_past.mcause)
+                                                           : csr_mcause_n_i;
+  assign rvfi_csr_wmask_d.mcause             = mret_ptr_wb ? (csr_mcause_we_i ? '1 : rvfi_csr_wmask_wb_past.mcause)
+                                                           : (csr_mcause_we_i ? '1 : '0);
 
   assign rvfi_csr_rdata_d.mtval              = '0;
   assign rvfi_csr_rmask_d.mtval              = '1;
@@ -1495,15 +1549,22 @@ module cv32e40x_rvfi
   assign rvfi_csr_wdata_d.mnxti              = csr_mnxti_n_i;
   assign rvfi_csr_wmask_d.mnxti              = csr_mnxti_we_i ? '1 : '0;
 
-  assign rvfi_csr_rdata_d.mintstatus         = csr_mintstatus_q_i;
+  // If an mret pointer is in WB, capture CSR rdata as seen by the mret instruction.
+  // Write mask/data are either from the mret (if pointer fetch is successful) or the pointer fetch  (if it generates an exception)
+  assign rvfi_csr_rdata_d.mintstatus         = mret_ptr_wb ? rvfi_csr_rdata_wb_past.mintstatus : csr_mintstatus_q_i;
   assign rvfi_csr_rmask_d.mintstatus         = '1;
-  assign rvfi_csr_wdata_d.mintstatus         = csr_mintstatus_n_i;
-  assign rvfi_csr_wmask_d.mintstatus         = csr_mintstatus_we_i ? '1 : '0;
-
-  assign rvfi_csr_rdata_d.mintthresh         = csr_mintthresh_q_i;
+  assign rvfi_csr_wdata_d.mintstatus         = mret_ptr_wb ? (csr_mintstatus_we_i ? csr_mintstatus_n_i : rvfi_csr_wdata_wb_past.mintstatus)
+                                                           : csr_mintstatus_n_i;
+  assign rvfi_csr_wmask_d.mintstatus         = mret_ptr_wb ? (csr_mintstatus_we_i ? '1 : rvfi_csr_wmask_wb_past.mintstatus)
+                                                           : (csr_mintstatus_we_i ? '1 : '0);
+  // If an mret pointer is in WB, capture CSR rdata as seen by the mret instruction.
+  // Write mask/data are either from the mret (if pointer fetch is successful) or the pointer fetch  (if it generates an exception)
+  assign rvfi_csr_rdata_d.mintthresh         = mret_ptr_wb ? rvfi_csr_rdata_wb_past.mintthresh : csr_mintthresh_q_i;
   assign rvfi_csr_rmask_d.mintthresh         = '1;
-  assign rvfi_csr_wdata_d.mintthresh         = csr_mintthresh_n_i;
-  assign rvfi_csr_wmask_d.mintthresh         = csr_mintthresh_we_i ? '1 : '0;
+  assign rvfi_csr_wdata_d.mintthresh         = mret_ptr_wb ? (csr_mintthresh_we_i ? csr_mintthresh_n_i : rvfi_csr_wdata_wb_past.mintthresh)
+                                                           : csr_mintthresh_n_i;
+  assign rvfi_csr_wmask_d.mintthresh         = mret_ptr_wb ? (csr_mintthresh_we_i ? '1 : rvfi_csr_wmask_wb_past.mintthresh)
+                                                           : (csr_mintthresh_we_i ? '1 : '0);
 
   assign rvfi_csr_rdata_d.mscratchcsw        = csr_mscratchcsw_q_i;
   assign rvfi_csr_rmask_d.mscratchcsw        = csr_mscratchcsw_in_wb_i ? '1 : '0;

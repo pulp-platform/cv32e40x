@@ -939,9 +939,7 @@ typedef enum logic[3:0] {
 parameter EXC_CAUSE_INSTR_FAULT      = 11'h01;
 parameter EXC_CAUSE_ILLEGAL_INSN     = 11'h02;
 parameter EXC_CAUSE_BREAKPOINT       = 11'h03;
-parameter EXC_CAUSE_LOAD_MISALIGNED  = 11'h04;
 parameter EXC_CAUSE_LOAD_FAULT       = 11'h05;
-parameter EXC_CAUSE_STORE_MISALIGNED = 11'h06;
 parameter EXC_CAUSE_STORE_FAULT      = 11'h07;
 parameter EXC_CAUSE_ECALL_MMODE      = 11'h0B;
 parameter EXC_CAUSE_INSTR_BUS_FAULT  = 11'h18;
@@ -1122,6 +1120,12 @@ typedef struct packed
   logic        tbljmp;
   logic        pushpop;    // Operation is part of a push/pop sequence.
 } instr_meta_t;
+
+typedef struct packed
+{
+  logic        bus_err;
+  logic        store;
+} lsu_err_wb_t;
 
 // Struct for carrying eXtension interface information
 typedef struct packed
@@ -1342,10 +1346,6 @@ typedef struct packed {
                                       // Setting to 11 bits (max), unused bits will be tied off
   logic [4:0]  nmi_mtvec_index;       // Offset into mtvec when taking an NMI
 
-  // To WB stage
-  logic        block_data_addr;       // To LSU to prevent data_addr_wb_i updates between error and taken NMI
-
-
   logic        irq_ack;               // Irq has been taken
   logic [9:0]  irq_id;                // Id of taken irq. Max width (1024 interrupts), unused bits will be tied off
   logic [7:0]  irq_level;             // Level of taken irq (CLIC only)
@@ -1373,7 +1373,6 @@ typedef struct packed {
   logic [31:0] pipe_pc;             // PC from pipeline
   mcause_t     csr_cause;           // CSR cause (saves to mcause CSR)
   logic        csr_restore_mret;    // Restore CSR due to mret
-  logic        csr_restore_mret_ptr; // Restore CSR due to mret followed by CLIC
   logic        csr_restore_dret;    // Restore CSR due to dret
   logic        csr_save_cause;      // Update CSRs
   logic        pending_nmi;         // An NMI is pending (for dcsr.nmip)

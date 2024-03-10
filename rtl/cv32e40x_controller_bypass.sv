@@ -92,7 +92,6 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
   rf_addr_t                          rf_waddr_wb;               // WB rf_waddr
 
   logic                              sys_mret_unqual_id;        // MRET in ID (not qualified with sys_en)
-  logic                              csr_exp_unqual_id;         // Explicit CSR in ID (not qualified with csr_en)
   logic                              csr_impl_rd_unqual_id;     // Implicit CSR read in ID (not qualified)
   logic                              jmpr_unqual_id;            // JALR in ID (not qualified with alu_en)
   logic                              tbljmp_unqual_id;          // Table jump in ID (not qualified with alu_en)
@@ -116,7 +115,6 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
   // eventually empty out removing that reasons for stall conditions.
 
   assign sys_mret_unqual_id = sys_mret_id_i && if_id_pipe_i.instr_valid;
-  assign csr_exp_unqual_id = csr_en_raw_id_i && if_id_pipe_i.instr_valid;
   assign jmpr_unqual_id = alu_jmpr_id_i && if_id_pipe_i.instr_valid;
   assign tbljmp_unqual_id = if_id_pipe_i.instr_meta.tbljmp && if_id_pipe_i.instr_valid;
 
@@ -208,7 +206,7 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
     // deassert WE when the core has an exception in ID (ins converted to nop and propagated to WB)
     // Also deassert for trigger match, as with dcsr.timing==0 we do not execute before entering debug mode
     // CLIC pointer fetches go through the pipeline, but no write enables should be active.
-    if (if_id_pipe_i.instr.bus_resp.err || !(if_id_pipe_i.instr.mpu_status == MPU_OK) || if_id_pipe_i.trigger_match ||
+    if (if_id_pipe_i.instr.bus_resp.err || !(if_id_pipe_i.instr.mpu_status == MPU_OK) || (|if_id_pipe_i.trigger_match) ||
         if_id_pipe_i.instr_meta.clic_ptr || if_id_pipe_i.instr_meta.mret_ptr) begin
       ctrl_byp_o.deassert_we = 1'b1;
     end
