@@ -116,3 +116,15 @@ sources:
         - bhv/cv32e40x_rvfi_data_obi.sv
       # Top Level + 2
         - bhv/cv32e40x_wrapper.sv
+    - target: cv32e40x_bhv
+      files:
+      # Top Level + 1
+        - bhv/include/cv32e40x_rvfi_pkg.sv
+        - bhv/cv32e40x_dbg_helper.sv
+        - bhv/cv32e40x_rvfi_sim_trace.sv
+        - bhv/cv32e40x_core_log.sv
+        - bhv/cv32e40x_rvfi.sv
+        - bhv/cv32e40x_rvfi_instr_obi.sv
+        - bhv/cv32e40x_rvfi_data_obi.sv
+      # Top Level + 2
+        - bhv/cv32e40x_wrapper.sv
