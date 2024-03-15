@@ -121,6 +121,7 @@ sources:
       files:
       # Top Level + 1
         - bhv/include/cv32e40x_rvfi_pkg.sv
+        - bhv/include/cv32e40x_wrapper.vh
         - bhv/cv32e40x_dbg_helper.sv
         - bhv/cv32e40x_rvfi_sim_trace.sv
         - bhv/cv32e40x_core_log.sv
