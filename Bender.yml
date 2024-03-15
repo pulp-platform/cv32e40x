@@ -24,6 +24,7 @@ package:
 export_include_dirs:
   - sva
   - bhv
+  - bhv/include
 
 sources:
   files:
