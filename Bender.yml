@@ -23,6 +23,7 @@ package:
 
 export_include_dirs:
   - sva
+  - bhv
 
 sources:
   files:
