@@ -498,13 +498,6 @@ endgenerate
                        .pending_sync_debug_i (core_i.controller_i.controller_fsm_i.pending_sync_debug),
                        .*);
 
-`ifndef FORMAL
-  bind cv32e40x_rvfi:
-    rvfi_i
-    cv32e40x_rvfi_sim_trace
-      tracer_i(.*);
-`endif
-
   bind cv32e40x_rvfi:
     rvfi_i
     cv32e40x_rvfi_sva
@@ -526,6 +519,13 @@ endgenerate
                .*);
 
 `endif //  `ifndef COREV_ASSERT_OFF
+
+`ifdef CORE_TRACES
+  bind cv32e40x_rvfi:
+    rvfi_i
+    cv32e40x_rvfi_sim_trace
+      tracer_i(.*);
+`endif
 
     cv32e40x_core_log
      #(   .ENABLE                ( CORE_LOG_ENABLE       ),

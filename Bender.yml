@@ -119,6 +119,8 @@ sources:
       # Top Level + 2
         - bhv/cv32e40x_wrapper.sv
     - target: cv32e40x_bhv
+      defines:
+        CORE_TRACES: ~
       files:
       # Top Level + 1
         - bhv/include/cv32e40x_rvfi_pkg.sv
