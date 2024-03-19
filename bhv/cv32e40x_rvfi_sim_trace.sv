@@ -48,13 +48,13 @@ module cv32e40x_rvfi_sim_trace
    input logic [32*NMEM-1:0] rvfi_mem_wdata
    );
 
-  typedef struct      {
-    bit [32*16-1:0]  c_file;
-    bit [32*16-1:0]  c_func;
-    int              c_line;
-    logic [31:0]     addr;
-    logic [31:0]     mcode;
-    bit [32*16-1:0]  asm;
+  typedef struct {
+    string      c_file;
+    string      c_func;
+    int         c_line;
+    logic[31:0] addr;
+    logic[31:0] mcode;
+    string      asm;
   } trace_t;
 
   localparam trace_t TRACE_UNKNOWN = '{c_func : "NA",
@@ -150,8 +150,8 @@ module cv32e40x_rvfi_sim_trace
                                 $sformatf("%-10s | %-6s | %-10s | %-6s | %-10s ||  Assembly",
                                           "memaddr", "rmask", "rdata", "wmask", "wdata")
                                 });
-            $fdisplay(logfile, {"==================================================================",
-                                "=========================================================================="});
+            $fdisplay(logfile, {$sformatf("=================================================================="),
+                                $sformatf("==========================================================================")});
           end
         end
 
