@@ -129,11 +129,10 @@ module cv32e40x_wb_stage import cv32e40x_pkg::*;
   // In case of MPU/PMA error, the register file should not be written.
   // rf_we_wb_o is deasserted if lsu_mpu_status is not equal to MPU_OK
 
-  // TODO:XIF Could use result interface.we into account if out of order completion is allowed.
-  assign rf_we_wb_o     = ex_wb_pipe_i.rf_we && !lsu_exception && !xif_waiting && !xif_exception && !(|lsu_wpt_match) && instr_valid;
-  // TODO:XIF Could use result interface.rd into account if out of order completion is allowed.
-  assign rf_waddr_wb_o  = ex_wb_pipe_i.rf_waddr;
-  // TODO:XIF Could use result interface.rd into account if out of order completion is allowed.
+  // XIF: If the instruction is an XIF one, write RF only if xif_result_if.result.we
+  assign rf_we_wb_o     = ex_wb_pipe_i.rf_we && !lsu_exception && !xif_waiting && !xif_exception && !(|lsu_wpt_match) && instr_valid && (~ex_wb_pipe_i.xif_en | xif_result_if.result.we);
+  // XIF: If the instruction is an XIF one, write RF according to xif_result_if.rd
+  assign rf_waddr_wb_o  = ex_wb_pipe_i.xif_en ? xif_result_if.result.rd : ex_wb_pipe_i.rf_waddr;
   // Not using any flopped/sticky version of lsu_rdata_i. The sticky bits are only needed for MPU errors and watchpoint triggers.
   // Any true load that succeeds will write the RF and will never be halted or killed by the controller. (wb_valid during the same cycle as lsu_valid_i).
   assign rf_wdata_wb_o  = ex_wb_pipe_i.lsu_en ? lsu_rdata_i               :
@@ -220,8 +219,6 @@ module cv32e40x_wb_stage import cv32e40x_pkg::*;
   // eXtension interface
   //---------------------------------------------------------------------------
 
-  // TODO:XIF How to handle conflicting values of ex_wb_pipe_i.rf_waddr and xif_result_if.result.rd?
-  // TODO:XIF How to handle conflicting values of ex_wb_pipe_i.rf_we (based on xif_issue_if.issue_resp.writeback in ID) and xif_result_if.result.we?
   // TODO:XIF Check whether result IDs match the instruction IDs propagated along the pipeline
   // TODO:XIF Implement writeback to extension context status into mstatus (ecswe, ecsdata)
 
