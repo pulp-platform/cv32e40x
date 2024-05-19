@@ -54,7 +54,8 @@ module cv32e40x_rvfi_sim_trace
     int              c_line;
     logic [31:0]     addr;
     logic [31:0]     mcode;
-    bit [32*16-1:0]  asm;
+    // bit [32*16-1:0]  asm;
+    string asm;
   } trace_t;
 
   localparam trace_t TRACE_UNKNOWN = '{c_func : "NA",
@@ -187,6 +188,7 @@ module cv32e40x_rvfi_sim_trace
                     if(asms[i] == "#") break; // Disregard comments
 
                     // Concatenate assembly instruction
+                    $display($sformatf("%-0s %-0s", tmp_trace.asm, asms[i]));
                     $cast(tmp_trace.asm,  $sformatf("%-0s %-0s", tmp_trace.asm, asms[i]));
                   end
 

@@ -821,6 +821,14 @@ endgenerate
 `endif
          );
 
+`ifdef COREV_ASSERT_OFF
+`ifndef FORMAL
+  bind cv32e40x_rvfi:
+    rvfi_i
+    cv32e40x_rvfi_sim_trace
+      tracer_i(.*);
+`endif
+`endif
 
     // instantiate the core
     cv32e40x_core
