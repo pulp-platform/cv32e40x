@@ -112,7 +112,8 @@ module cv32e40x_rvfi_sim_trace
 
             for (int unsigned i_trace=0; i_trace < num_trace_lines; i_trace++) begin
               rvfi_info_string = $sformatf(
-                                           "0x%8h | x%-2d (0x%8h) | x%-2d (0x%8h) | x%-2d (0x%8h) | 0x%8h | 0x%4b | 0x%8h | 0x%4b | 0x%8h || ",
+                                           "%-10dns | 0x%8h | x%-2d (0x%8h) | x%-2d (0x%8h) | x%-2d (0x%8h) | 0x%8h | 0x%4b | 0x%8h | 0x%4b | 0x%8h || ",
+                                           $time() / 1.0ns,
                                            rvfi_pc_rdata,
                                            rvfi_rs1_addr, rvfi_rs1_rdata,
                                            rvfi_rs2_addr, rvfi_rs2_rdata,
@@ -146,13 +147,15 @@ module cv32e40x_rvfi_sim_trace
             $display("RISC-V Trace: Writing log to: %s", logfilename);
 
             logfile_ok = 1'b1;
-            $fdisplay(logfile, {$sformatf("%-10s | %-3s (%-10s) | %-3s (%-10s) | %-3s (%-10s) | ",
+            $fdisplay(logfile, {$sformatf("%-12s | ", "ns"),
+                                $sformatf("%-10s | %-3s (%-10s) | %-3s (%-10s) | %-3s (%-10s) | ",
                                           "pc", "rs1", "   data", "rs2", "   data", "rd", "   data"),
                                 $sformatf("%-10s | %-6s | %-10s | %-6s | %-10s ||  Assembly",
                                           "memaddr", "rmask", "rdata", "wmask", "wdata")
                                 });
-            $fdisplay(logfile, {"==================================================================",
-                                "=========================================================================="});
+            $fdisplay(logfile, {$sformatf("%s", "==============="),
+                                $sformatf("%s", "=================================================================="),
+                                $sformatf("%s", "==========================================================================")});
           end
         end
 
@@ -188,7 +191,6 @@ module cv32e40x_rvfi_sim_trace
                     if(asms[i] == "#") break; // Disregard comments
 
                     // Concatenate assembly instruction
-                    $display($sformatf("%-0s %-0s", tmp_trace.asm, asms[i]));
                     $cast(tmp_trace.asm,  $sformatf("%-0s %-0s", tmp_trace.asm, asms[i]));
                   end
 
