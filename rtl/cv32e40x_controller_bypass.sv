@@ -97,7 +97,8 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
   logic                              jmpr_unqual_id;            // JALR in ID (not qualified with alu_en)
   logic                              tbljmp_unqual_id;          // Table jump in ID (not qualified with alu_en)
 
-  assign rf_we_ex = id_ex_pipe_i.rf_we && id_ex_pipe_i.instr_valid;
+  assign rf_we_ex = id_ex_pipe_i.xif_en ? id_ex_pipe_i.xif_meta.writeback && id_ex_pipe_i.instr_valid
+                                        : id_ex_pipe_i.rf_we && id_ex_pipe_i.instr_valid;
   assign rf_we_wb = ex_wb_pipe_i.rf_we && ex_wb_pipe_i.instr_valid;
   assign lsu_en_wb = ex_wb_pipe_i.lsu_en && ex_wb_pipe_i.instr_valid;
 
@@ -186,7 +187,8 @@ module cv32e40x_controller_bypass import cv32e40x_pkg::*;
       assign rf_rd_wb_match[i] = (rf_waddr_wb == rf_raddr_id_i[i]) && |rf_raddr_id_i[i] && rf_re_id_i[i];
 
       // Load-read hazard (for any instruction following a load)
-      assign rf_rd_ex_hz[i] = rf_rd_ex_match[i];
+      // XIF: assume that load-use hazards are managed inside the XIFU
+      assign rf_rd_ex_hz[i] = ~(id_ex_pipe_i.xif_en) ? rf_rd_ex_match[i] : '0;
       assign rf_rd_wb_hz[i] = rf_rd_wb_match[i];
     end
   endgenerate

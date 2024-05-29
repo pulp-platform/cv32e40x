@@ -1131,6 +1131,7 @@ typedef struct packed
   logic        dualwrite; // Will oflfoaded ins cause a dual writeback?
   logic [31:0] id;        // ID of offloaded ins
   logic        accepted;  // Was the offloaded instruction accepted or not?
+  logic        writeback; // Will the coprocessor perform a writeback in the core to rd?
 } xif_meta_t;
 
 // Struct for signaling if there is an atomic LSU instruction, and of which type
