@@ -646,7 +646,6 @@ module cv32e40x_id_stage import cv32e40x_pkg::*;
         id_ex_pipe_o.xif_meta.loadstore     <= xif_loadstore;
         id_ex_pipe_o.xif_meta.dualwrite     <= xif_dualwrite;
         id_ex_pipe_o.xif_meta.accepted      <= xif_insn_accept;
-        id_ex_pipe_o.xif_meta.writeback     <= xif_we;
 
       end else if (ex_ready_i) begin
         id_ex_pipe_o.instr_valid            <= 1'b0;
