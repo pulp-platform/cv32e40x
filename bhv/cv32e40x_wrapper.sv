@@ -525,6 +525,11 @@ endgenerate
                .m_c_obi_data_if  (core_i.m_c_obi_data_if),
                .*);
 
+`elsif CV32E40X_TRACE_EXECUTION
+  bind cv32e40x_rvfi:
+       rvfi_i
+       cv32e40x_rvfi_sim_trace
+         tracer_i(.*);
 `endif //  `ifndef COREV_ASSERT_OFF
 
     cv32e40x_core_log
@@ -820,7 +825,6 @@ endgenerate
          ,`RVFI_TIEOFF
 `endif
          );
-
 
     // instantiate the core
     cv32e40x_core
