@@ -79,6 +79,24 @@ sources:
     - rtl/cv32e40x_register_file_wrapper.sv
   # Top Level
     - rtl/cv32e40x_core.sv
+    # BHV target
+    - target: cv32e40x_bhv
+      include_dirs:
+        - bhv/include
+      defines:
+        # Disable SVA
+        COREV_ASSERT_OFF: ~
+      files:
+      # Top Level + 1
+        - bhv/include/cv32e40x_rvfi_pkg.sv
+        - bhv/cv32e40x_dbg_helper.sv
+        - bhv/cv32e40x_rvfi_sim_trace.sv
+        - bhv/cv32e40x_core_log.sv
+        - bhv/cv32e40x_rvfi.sv
+        - bhv/cv32e40x_rvfi_instr_obi.sv
+        - bhv/cv32e40x_rvfi_data_obi.sv
+      # Top Level + 2
+        - bhv/cv32e40x_wrapper.sv
     # SVA target
     - target: cv32e40x_sva
       files:

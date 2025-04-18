@@ -593,9 +593,8 @@ module cv32e40x_load_store_unit import cv32e40x_pkg::*;
 
 
   // External (EX) ready only when not handling multi cycle split accesses
-  // otherwise we may let a new instruction into EX, overwriting second phase of split access..
-  // XIF transactions take precedence, thus the LSU is not ready for EX in case of an XIF request.
-  assign ready_0_o = done_0 && !lsu_split_0_o && !xif_req;
+  // otherwise we may let a new instruction into EX, overwriting second phase of split access.
+  assign ready_0_o = done_0 && !lsu_split_0_o;
 
   generate
     if (X_EXT) begin : x_ext_mem_ready
